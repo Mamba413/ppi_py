@@ -336,9 +336,89 @@ def crossppi_ols_ci(
     )
 
 
+def crossppi_ols_pred_ci(
+    X,
+    Y,
+    Yhat,
+    X_unlabeled,
+    Yhat_unlabeled,
+    X_pred,
+    alpha=0.1,
+    alternative="two-sided",
+    bootstrap_data=None,
+):
+    """Computes the cross-prediction-powered point estimate of the OLS coefficients.
+
+    Args:
+        X (ndarray): Covariates corresponding to the gold-standard labels. Shape (n, d).
+        Y (ndarray): Gold-standard labels. Shape (n,).
+        Yhat (ndarray): Predictions corresponding to the gold-standard labels. Shape (n,).
+        X_unlabeled (ndarray): Covariates corresponding to the unlabeled data. Shape (N, d).
+        Yhat_unlabeled (ndarray): Predictions corresponding to the unlabeled data. Columns contain predictions from different models. Shape (N, K).
+        alpha (float, optional): Error level; the confidence interval will target a coverage of 1 - alpha. Must be in the range (0, 1).
+        alternative (str, optional): Alternative hypothesis, either 'two-sided', 'larger' or 'smaller'.
+        bootstrap_data (dict, optional): Bootstrap data used to estimate the variance of the point estimate. Assumes keys "X", "Y", "Yhat", "Yhat_unlabeled".
+
+    Returns:
+        tuple: Lower and upper bounds of the cross-prediction-powered confidence interval for the OLS coefficients.
+    """
+    if len(Yhat_unlabeled.shape) != 2:
+        raise ValueError(
+            "Yhat_unlabeled must be a 2-dimensional array with shape (N, K)."
+        )
+    n = Y.shape[0]
+    d = X.shape[1]
+    N = Yhat_unlabeled.shape[0]
+
+    crossppi_pointest = crossppi_ols_pointestimate(
+        X, Y, Yhat, X_unlabeled, Yhat_unlabeled
+    )
+
+    if bootstrap_data == None:
+        X_bstrap = X
+        Y_bstrap = Y
+        Yhat_bstrap = Yhat
+        Yhat_unlabeled_bstrap = Yhat_unlabeled.mean(axis=1)
+    else:
+        X_bstrap = bootstrap_data["X"]
+        Y_bstrap = bootstrap_data["Y"]
+        Yhat_bstrap = bootstrap_data["Yhat"]
+        Yhat_unlabeled_bstrap = bootstrap_data["Yhat_unlabeled"].mean(axis=1)
+
+    hessian = np.zeros((d, d))
+    grads_hat_unlabeled = np.zeros(X_unlabeled.shape)
+    for i in range(N):
+        hessian += 1 / (N + n) * np.outer(X_unlabeled[i], X_unlabeled[i])
+        grads_hat_unlabeled[i, :] = X_unlabeled[i, :] * (
+            np.dot(X_unlabeled[i, :], crossppi_pointest)
+            - Yhat_unlabeled_bstrap[i]
+        )
+
+    for i in range(n):
+        hessian += 1 / (N + n) * np.outer(X[i], X[i])
+
+    grads_diff = np.zeros(X_bstrap.shape)
+    for i in range(X_bstrap.shape[0]):
+        grads_diff[i, :] = X_bstrap[i, :] * (Yhat_bstrap[i] - Y_bstrap[i])
+
+    inv_hessian = np.linalg.inv(hessian).reshape(d, d)
+    var_unlabeled = np.cov(grads_hat_unlabeled.T).reshape(d, d)
+    var = np.cov(grads_diff.T).reshape(d, d)
+
+    Sigma_hat = inv_hessian @ (n / N * var_unlabeled + var) @ inv_hessian
+
+    X_unlabeled_pred = np.dot(X_pred, crossppi_pointest)
+    ppi_pred_std = np.sqrt(np.diag(X_pred @ Sigma_hat @ X_pred.transpose()) / n)
+
+    return _zconfint_generic(
+        X_unlabeled_pred,
+        ppi_pred_std,
+        alpha=alpha,
+        alternative=alternative,
+    )
+
 """
     LOGISTIC REGRESSION
-
 """
 
 
@@ -439,7 +519,7 @@ def crossppi_logistic_ci(
         alpha (float, optional): Error level; the confidence interval will target a coverage of 1 - alpha. Must be in the range (0, 1).
         alternative (str, optional): Alternative hypothesis, either 'two-sided', 'larger' or 'smaller'.
         bootstrap_data (dict, optional): Bootstrap data used to estimate the variance of the point estimate. Assumes keys "X", "Y", "Yhat", "Yhat_unlabeled".
-        optimizer_options (dict, ooptional): Options to pass to the optimizer. See scipy.optimize.minimize for details.
+        optimizer_options (dict, optional): Options to pass to the optimizer. See scipy.optimize.minimize for details.
     Returns:
         tuple: Lower and upper bounds of the cross-prediction-powered confidence interval for the logistic regression coefficients.
 

@@ -791,7 +791,7 @@ def ppi_logistic_pointestimate(
     # Initialize theta
     theta = (
         LogisticRegression(
-            penalty=None,
+            penalty='none',
             solver="lbfgs",
             max_iter=10000,
             tol=1e-15,
@@ -1064,6 +1064,111 @@ def ppi_logistic_ci(
     return _zconfint_generic(
         ppi_pointest,
         np.sqrt(np.diag(Sigma_hat) / n),
+        alpha=alpha,
+        alternative=alternative,
+    )
+
+def _logistic_prob(X, theta):
+    linear_value = np.dot(X, theta.reshape(-1, 1))
+    prob = expit(linear_value).flatten()
+    return prob
+
+def _logistic_grad(X, theta):
+    '''
+    @params X: a n-by-p matrix. Each row corresponds to a sample.
+
+    Return: a gradient of each samples. It is a n-by-p matrix.
+    '''
+    w = _logistic_prob(X, theta).reshape(-1, 1)
+    grad = X * w
+    return grad
+
+
+def ppi_logistic_pred_ci(
+    X,
+    Y,
+    Yhat,
+    X_unlabeled,
+    Yhat_unlabeled,
+    X_pred,
+    alpha=0.1,
+    alternative="two-sided",
+    lhat=None,
+    coord=None,
+    optimizer_options=None,
+    w=None,
+    w_unlabeled=None,
+):
+    n = Y.shape[0]
+    d = X.shape[1]
+    N = Yhat_unlabeled.shape[0]
+    w = np.ones(n) if w is None else w / w.sum() * n
+    w_unlabeled = (
+        np.ones(N)
+        if w_unlabeled is None
+        else w_unlabeled / w_unlabeled.sum() * N
+    )
+    use_unlabeled = lhat != 0
+
+    ppi_pointest = ppi_logistic_pointestimate(
+        X,
+        Y,
+        Yhat,
+        X_unlabeled,
+        Yhat_unlabeled,
+        optimizer_options=optimizer_options,
+        lhat=lhat,
+        coord=coord,
+        w=w,
+        w_unlabeled=w_unlabeled,
+    )
+
+    grads, grads_hat, grads_hat_unlabeled, inv_hessian = _logistic_get_stats(
+        ppi_pointest,
+        X,
+        Y,
+        Yhat,
+        X_unlabeled,
+        Yhat_unlabeled,
+        w,
+        w_unlabeled,
+        use_unlabeled=use_unlabeled,
+    )
+    if lhat is None:
+        lhat = _calc_lhat_glm(
+            grads,
+            grads_hat,
+            grads_hat_unlabeled,
+            inv_hessian,
+            clip=True,
+        )
+        return ppi_logistic_ci(
+            X,
+            Y,
+            Yhat,
+            X_unlabeled,
+            Yhat_unlabeled,
+            alpha=alpha,
+            optimizer_options=optimizer_options,
+            alternative=alternative,
+            lhat=lhat,
+            coord=coord,
+            w=w,
+            w_unlabeled=w_unlabeled,
+        )
+
+    var_unlabeled = np.cov(lhat * grads_hat_unlabeled.T).reshape(d, d)
+
+    var = np.cov(grads.T - lhat * grads_hat.T).reshape(d, d)
+
+    Sigma_hat = n * inv_hessian @ (var_unlabeled / N + var / n) @ inv_hessian
+
+    logistic_grad = _logistic_grad(X_pred, ppi_pointest)
+    ppi_pred_std = np.sqrt(np.diag(logistic_grad @ Sigma_hat @ logistic_grad.transpose()) / n)
+
+    return _zconfint_generic(
+        _logistic_prob(X_pred, ppi_pointest),
+        ppi_pred_std,
         alpha=alpha,
         alternative=alternative,
     )

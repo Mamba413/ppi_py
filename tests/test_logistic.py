@@ -10,6 +10,47 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 """
 
 
+def test_ppi_logistic_pred_ci(
+    i, alphas=[0.0001], n=1000, N=10000, d=1, epsilon=0.02
+):
+    included_prop = np.zeros(len(alphas))
+    # Make a synthetic regression problem
+    X = np.random.randn(n, d)
+    beta = np.random.randn(d)
+    beta_prediction = beta + np.random.randn(d) + 2
+    Y = np.random.binomial(1, expit(X.dot(beta)))
+    Yhat = expit(X.dot(beta_prediction))
+    # Make a synthetic unlabeled data set with predictions Yhat
+    X_unlabeled = np.random.randn(N, d)
+    Yhat_unlabeled = expit(X_unlabeled.dot(beta_prediction))
+    # Compute the confidence interval
+    for j in range(len(alphas)):
+        X_pred = np.random.randn(n, d)
+        beta_ppi_ci = ppi_logistic_pred_ci(
+            X,
+            Y,
+            Yhat,
+            X_unlabeled,
+            Yhat_unlabeled,
+            X_pred,
+            alpha=alphas[j],
+            lhat=1.0,
+            optimizer_options={"gtol": 1e-3},
+        )
+        # Check that the confidence interval contains the true beta
+        included_prop[j] = np.mean(
+            np.logical_and(
+                beta_ppi_ci[0] <= expit(X_pred.dot(beta)),
+                expit(X_pred.dot(beta)) <= beta_ppi_ci[1],
+            )
+        )
+
+    return included_prop
+
+
+test_ppi_logistic_pred_ci(1)
+
+
 def test_ppi_logistic_pointestimate_debias():
     # Make a synthetic regression problem
     n = 100
